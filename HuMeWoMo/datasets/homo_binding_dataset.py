@@ -349,5 +349,5 @@ if __name__ == "__main__":
 
     print()
     print("╔" + "═" * 68 + "╗")
-    print("║   Homo dataset test passed!                                       ║")
+    print("║   Homo dataset test passed!                                        ║")
     print("╚" + "═" * 68 + "╝")
