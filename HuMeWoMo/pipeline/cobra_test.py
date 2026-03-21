@@ -1,30 +1,45 @@
 import cobra
 
-MODEL_PATH = "data/Human-GEM.xml"
-OBJECTIVE = "MAR13082" 
-TARGET_REACTION = "MAR04358" # The reaction your drug targets
-INHIBITION_FRACTION = 0.80   # 80% inhibition
 
-print(f"Loading {MODEL_PATH}...")
-model = cobra.io.read_sbml_model(MODEL_PATH)
-model.objective = OBJECTIVE
+def simulate_batch_inhibition(model, baseline_fluxes, target_inhibitions):
+    with model:
+        for target_id, inhibition_fraction in target_inhibitions.items():
+            try:
+                rxn = model.reactions.get_by_id(target_id)
+            except KeyError:
+                continue 
 
-# 1. Establish the wild-type baseline
-wt_solution = model.optimize()
-wt_flux = wt_solution.fluxes[TARGET_REACTION]
-print(f"Wild-Type Objective: {wt_solution.objective_value}")
-print(f"Wild-Type Target Flux: {wt_flux}")
+            wt_flux = baseline_fluxes[target_id]
+            capacity = 1.0 - inhibition_fraction
+            
+            if wt_flux > 0:
+                rxn.upper_bound = wt_flux * capacity
+            elif wt_flux < 0:
+                rxn.lower_bound = wt_flux * capacity
 
-# 2. Apply the fractional constraint
-rxn = model.reactions.get_by_id(TARGET_REACTION)
+        solution = model.optimize()
+        return solution
 
-# Check directionality to apply the constraint to the active bound
-if wt_flux > 0:
-    rxn.upper_bound = wt_flux * (1 - INHIBITION_FRACTION)
-elif wt_flux < 0:
-    rxn.lower_bound = wt_flux * (1 - INHIBITION_FRACTION)
+    
+if __name__ == "__main__":
+    model = cobra.io.read_sbml_model("data/Human-GEM.xml")
+    model.objective = "MAR13082"
+    
+    wt_solution = model.optimize()
+    baseline_fluxes = wt_solution.fluxes
+    
+    # Mapping enzyme inhibitions to reaction constraints based on GPR logic
+    # would occur here before passing the dictionary to the simulator.
+    drug_profile = {
+        "MAR04358": 0.80,
+        "MAR04359": 0.50,
+        "MAR01234": 0.95
+    }
+    
+    mutant_solution = simulate_batch_inhibition(model, baseline_fluxes, drug_profile)
+    
+    if mutant_solution.status == 'optimal':
+        print(f"Inhibited Objective: {mutant_solution.objective_value}")
+    else:
+        print("Model could not find an optimal solution (infeasible).")
 
-# 3. Simulate the inhibited network
-inhibited_solution = model.optimize()
-print(f"Inhibited Objective: {inhibited_solution.objective_value}")
-print(f"Inhibited Target Flux: {inhibited_solution.fluxes[TARGET_REACTION]}")
