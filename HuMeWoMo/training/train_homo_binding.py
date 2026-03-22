@@ -21,7 +21,7 @@ from HuMeWoMo.models.homo_binding_model import HomoBindingModel
 # HYPERPARAMETERS & CONFIG
 # =============================================================================
 DATA_DIR = "./bindingdb_data/final_dataset"
-BATCH_SIZE = 16
+BATCH_SIZE = 128
 EPOCHS = 50
 LEARNING_RATE = 1e-4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -30,10 +30,13 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MIN_IMPROVEMENT = 0.005  # Save backup if val loss improves by at least this much
 MODEL_SAVE_PATH = "best_homo_model.pt"
 BACKUP_SAVE_PATH = "best_homo_model_backup.pt"
+CHECKPOINT_EVERY_N_BATCHES = 500  # Save a checkpoint every N batches
+CHECKPOINT_DIR = "checkpoints"
 
 # Plotting
 FIGS_DIR = os.path.join(project_root, "figs")
 os.makedirs(FIGS_DIR, exist_ok=True)
+os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
 # =============================================================================
 # TRAINING LOOP
@@ -81,11 +84,22 @@ def train():
         num_decoder_layers=3
     ).to(DEVICE)
 
+    # Try to load best model checkpoint if it exists
+    try:
+        checkpoint = torch.load(MODEL_SAVE_PATH, map_location=DEVICE)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        print(f"Loaded best model from {MODEL_SAVE_PATH} (epoch {checkpoint['epoch']}, val_loss {checkpoint['val_loss']:.4f})")
+    except FileNotFoundError:
+        print(f"No checkpoint found at {MODEL_SAVE_PATH}, starting from scratch.")
+    except Exception as e:
+        print(f"Failed to load checkpoint from {MODEL_SAVE_PATH}: {e}. Starting from scratch.")
+
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
     criterion = nn.MSELoss()
 
     best_val_loss = float('inf')
+    global_step = 0
     history = {'train_loss': [], 'val_loss': [], 'test_loss': []}
 
     for epoch in range(1, EPOCHS + 1):
@@ -93,7 +107,7 @@ def train():
         model.train()
         train_loss = 0.0
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{EPOCHS} [Train]")
-        
+
         for i, batch in enumerate(pbar, 1):
             batch = batch.to(DEVICE)
             optimizer.zero_grad()
@@ -106,8 +120,21 @@ def train():
 
             train_loss += loss.item()
             avg_loss = train_loss / i
+            global_step += 1
             pbar.set_postfix({'loss': f"{loss.item():.4f}"})
             wandb.log({"train/batch_loss": loss.item(), "train/running_avg_loss": avg_loss})
+
+            # Periodic checkpoint every N batches
+            if global_step % CHECKPOINT_EVERY_N_BATCHES == 0:
+                ckpt_path = os.path.join(CHECKPOINT_DIR, f"checkpoint_step_{global_step}.pt")
+                torch.save({
+                    'epoch': epoch,
+                    'global_step': global_step,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'train_loss': avg_loss,
+                }, ckpt_path)
+                print(f"\n  Checkpoint saved to {ckpt_path}")
         
         avg_train_loss = train_loss / len(train_loader)
         history['train_loss'].append(avg_train_loss)
