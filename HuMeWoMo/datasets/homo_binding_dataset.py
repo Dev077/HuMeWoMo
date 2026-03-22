@@ -41,7 +41,7 @@ from torch.utils.data import Dataset
 from torch_geometric.data import Data, Batch
 
 # Import shared classes from the standard dataset module
-from binding_dataset import DrugEnzymePair, DrugEnzymeCollater, CombinedBatch
+from .binding_dataset import DrugEnzymePair, DrugEnzymeCollater, CombinedBatch
 
 
 # =============================================================================
