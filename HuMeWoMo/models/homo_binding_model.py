@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import TransformerConv, global_mean_pool
+from torch_geometric.nn import TransformerConv
 from torch_geometric.utils import to_dense_batch
 
 class HomoGraphEncoder(nn.Module):
@@ -82,13 +82,11 @@ class DecoderBlock(nn.Module):
 
     def forward(self, latents, d_k, d_v, d_mask, e_k, e_v, e_mask):
         # 1. Pre-Norm and Query Generation
-        # We generate the "lookups" based on our current latent state
         norm_latents = self.ln1(latents)
         q_d = self.q_proj_drug(norm_latents)
         q_e = self.q_proj_enzyme(norm_latents)
         
         # 2. Parallel Cross-Attention
-        # Each query scans its respective molecule
         attn_d, _ = self.drug_attn(query=q_d, key=d_k, value=d_v, key_padding_mask=~d_mask)
         attn_e, _ = self.enzyme_attn(query=q_e, key=e_k, value=e_v, key_padding_mask=~e_mask)
         
@@ -146,11 +144,19 @@ class HomoBindingModel(nn.Module):
     """
     The full model orchestrating Drug/Enzyme encoders and the Cross-Attention decoder.
     """
-    def __init__(self, drug_in_dim=50, enzyme_in_dim=27, hidden_dim=128, n_heads=4):
+    def __init__(self, 
+                 drug_in_dim=50, 
+                 enzyme_in_dim=27, 
+                 hidden_dim=128, 
+                 n_heads=4,
+                 num_drug_layers=3,
+                 num_enzyme_layers=3,
+                 num_decoder_layers=3,
+                 num_latents=16):
         super().__init__()
-        self.drug_encoder = HomoGraphEncoder(drug_in_dim, hidden_dim, hidden_dim, heads=n_heads)
-        self.enzyme_encoder = HomoGraphEncoder(enzyme_in_dim, hidden_dim, hidden_dim, heads=n_heads)
-        self.decoder = CrossAttentionDecoder(hidden_dim, num_heads=n_heads)
+        self.drug_encoder = HomoGraphEncoder(drug_in_dim, hidden_dim, hidden_dim, num_layers=num_drug_layers, heads=n_heads)
+        self.enzyme_encoder = HomoGraphEncoder(enzyme_in_dim, hidden_dim, hidden_dim, num_layers=num_enzyme_layers, heads=n_heads)
+        self.decoder = CrossAttentionDecoder(hidden_dim, num_latents=num_latents, num_layers=num_decoder_layers, num_heads=n_heads)
 
     def forward(self, batch):
         # 1. Encode Drug Graph
@@ -170,64 +176,70 @@ class HomoBindingModel(nn.Module):
         return prediction
 
 if __name__ == "__main__":
+    import sys
     import os
-    from ..datasets.homo_binding_dataset import get_homo_dataloaders
-
-    print("Checking for dataset...")
+    
+    # Configuration for test
+    BATCH_SIZE = 4
     DATA_PATH = "./bindingdb_data/final_dataset"
     
+    # Path setup to allow running as a script
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(current_dir)
+    if project_root not in sys.path:
+        sys.path.append(project_root)
+
+    print(f"Running Inference Test (Batch Size: {BATCH_SIZE})...")
+    
     if not os.path.exists(DATA_PATH):
-        print(f"Dataset not found at {DATA_PATH}. Initializing model with dummy batch instead.")
-        class DummyBatch:
-            def __init__(self):
-                self.drug_x = torch.randn(20, 50)
-                self.drug_edge_index = torch.tensor([[0, 1], [1, 0]], dtype=torch.long)
-                self.drug_batch = torch.zeros(20, dtype=torch.long)
-                self.enzyme_x = torch.randn(100, 40)
-                self.enzyme_edge_index = torch.tensor([[0, 1], [1, 0]], dtype=torch.long)
-                self.enzyme_batch = torch.zeros(100, dtype=torch.long)
-                self.y = torch.tensor([7.0])
-        batch = DummyBatch()
+        print(f"Dataset not found at {DATA_PATH}. Please run data pipeline first.")
     else:
-        print("Loading real test sample...")
         try:
-            from ..datasets.homo_binding_dataset import HomoDrugEnzymeDataset
-            from ..datasets.binding_dataset import DrugEnzymeCollater
+            # Load only the test dataset directly
+            from HuMeWoMo.datasets.homo_binding_dataset import HomoDrugEnzymeDataset
+            from HuMeWoMo.datasets.binding_dataset import DrugEnzymeCollater
             
             test_pkl = os.path.join(DATA_PATH, "test.pkl")
-            dataset = HomoDrugEnzymeDataset(test_pkl, max_samples=10)
+            dataset = HomoDrugEnzymeDataset(test_pkl, max_samples=100)
             collater = DrugEnzymeCollater()
             test_loader = torch.utils.data.DataLoader(
-                dataset, batch_size=1, collate_fn=collater
+                dataset, batch_size=BATCH_SIZE, collate_fn=collater, shuffle=True
             )
+            
+            # Get one batch
             batch = next(iter(test_loader))
+            
+            # Initialize model
+            model = HomoBindingModel(
+                drug_in_dim=50, 
+                enzyme_in_dim=27, 
+                hidden_dim=128, 
+                n_heads=4
+            )
+            
+            # Run inference
+            model.eval()
+            with torch.no_grad():
+                output = model(batch)
+            
+            print("\n" + "="*60)
+            print("BATCH INFORMATION:")
+            print("="*60)
+            print(f"  Batch size:              {BATCH_SIZE}")
+            print(f"  Drug Nodes (Total):      {batch.drug_x.shape[0]}")
+            print(f"  Enzyme Nodes (Total):    {batch.enzyme_x.shape[0]}")
+            print(f"  Drug Feature Dim:        {batch.drug_x.shape[1]}")
+            print(f"  Enzyme Feature Dim:      {batch.enzyme_x.shape[1]}")
+            
+            print("\n" + "="*60)
+            print("PREDICTION RESULTS:")
+            print("="*60)
+            print(f"  Targets (y):             {batch.y}")
+            print(f"  Predictions:             {output}")
+            print(f"  Mean Squared Error:      {F.mse_loss(output, batch.y).item():.4f}")
+            print("="*60)
+            
         except Exception as e:
-            print(f"Error loading real data: {e}. Falling back to dummy.")
-            class DummyBatch:
-                def __init__(self):
-                    self.drug_x = torch.randn(20, 50); self.drug_edge_index = torch.tensor([[0, 1], [1, 0]], dtype=torch.long); self.drug_batch = torch.zeros(20, dtype=torch.long)
-                    self.enzyme_x = torch.randn(100, 40); self.enzyme_edge_index = torch.tensor([[0, 1], [1, 0]], dtype=torch.long); self.enzyme_batch = torch.zeros(100, dtype=torch.long)
-                    self.y = torch.tensor([7.0])
-            batch = DummyBatch()
-
-    # Initialize model
-    model = HomoBindingModel(
-        drug_in_dim=50, 
-        enzyme_in_dim=27, 
-        hidden_dim=64, 
-        n_heads=4
-    )
-    
-    # Run inference
-    model.eval()
-    with torch.no_grad():
-        output = model(batch)
-    
-    print("\n" + "="*50)
-    print("INFERENCE TEST (Batch Size 1)")
-    print("="*50)
-    print(f"Input Drug Nodes:   {batch.drug_x.shape[0]}")
-    print(f"Input Enzyme Nodes: {batch.enzyme_x.shape[0]}")
-    print(f"Target pActivity:   {batch.y.item():.4f}")
-    print(f"Model Prediction:   {output.item():.4f}")
-    print("="*50)
+            print(f"Error during inference test: {e}")
+            import traceback
+            traceback.print_exc()
