@@ -14,8 +14,8 @@ from Bio.PDB.Polypeptide import protein_letters_3to1
 # CONFIG
 # =============================================================================
 USE_PYG = True   # Store as PyTorch Geometric Data objects if possible
-INPUT_PATH = "data/enzymes.txt"
-OUTPUT_PATH = "data/enzymes.pkl"
+INPUT_PATH = "data/human1_enzymes.txt"
+OUTPUT_PATH = "data/human1_enzymes.pkl"
 PDB_DIR = "data/alphafold_structures"
 CONTACT_DISTANCE = 8.0  
 REQUEST_DELAY = 0.1     

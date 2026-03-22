@@ -33,7 +33,7 @@ def generate_enzyme_list(model_path, output_path):
 
 if __name__ == "__main__":
     MODEL_PATH = "data/Human-GEM.xml"
-    OUTPUT_PATH = "data/enzymes.txt"
+    OUTPUT_PATH = "data/human1_enzymes.txt"
     
     if os.path.exists(MODEL_PATH):
         generate_enzyme_list(MODEL_PATH, OUTPUT_PATH)
