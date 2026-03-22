@@ -1,6 +1,8 @@
 import cobra
 import pandas as pd
 import re
+import os
+import pickle
 
 def evaluate_gpr_activity(rule, gene_activities):
     """
@@ -131,21 +133,51 @@ def simulate_enzyme_inhibition(model, enzyme_data, default_inhibition=0.5):
 
 if __name__ == "__main__":
     print("Loading model...")
-    model = cobra.io.read_sbml_model("data/Human-GEM.xml")
-    model.objective = "MAR13082" 
+    # Adjust path if script is run from project root
+    model_path = "data/Human-GEM.xml"
+    if not os.path.exists(model_path):
+        model_path = "../../data/Human-GEM.xml"
+    model = cobra.io.read_sbml_model(model_path)
+    model.objective = "MAR13082" # Default: Growth
     
-    # Example: Dict of specific inhibition levels per enzyme
-    enzyme_targets = {
-        "O60762": 0.9, # 90% inhibition
-        "Q9BTY2": 0.4, # 40% inhibition
-        "P48506": 0.1  # 10% inhibition
-    }
+    # 1. Try to load affinities from pkl
+    AFFINITIES_PATH = "data/affinities.pkl"
+    enzyme_targets = {}
+    
+    if os.path.exists(AFFINITIES_PATH):
+        print(f"Loading affinities from {AFFINITIES_PATH}...")
+        with open(AFFINITIES_PATH, 'rb') as f:
+            raw_affinities = pickle.load(f)
+        
+        # Simulated Drug Concentration (1 micromolar)
+        CONC = 1e-6
+        
+        # Convert pActivity (score) to inhibition (0 to 1)
+        # Formula: I = C / (C + IC50) where IC50 = 10^-pActivity
+        for uid, score in raw_affinities.items():
+            ic50 = 10**(-score)
+            inhibition = CONC / (CONC + ic50)
+            enzyme_targets[uid] = inhibition
+            
+        print(f"  Converted {len(enzyme_targets)} affinities to inhibition values.")
+    else:
+        print(f"Warning: {AFFINITIES_PATH} not found. Using fallback dictionary.")
+        # Fallback example
+        enzyme_targets = {
+            "O60762": 0.9, # 90% inhibition
+            "Q9BTY2": 0.4, # 40% inhibition
+            "P48506": 0.1  # 10% inhibition
+        }
     
     print("Optimizing...")
     inhibited_solution = simulate_enzyme_inhibition(model, enzyme_targets)
     
     if inhibited_solution is not None and inhibited_solution.status == 'optimal':
-        print(f"Inhibition Objective: {inhibited_solution.objective_value}")
-        print(f"Extracted flux vector for {len(inhibited_solution.fluxes)} reactions.")
+        print(f"Inhibition Objective: {inhibited_solution.objective_value:.6f}")
+        
+        # 2. Save flux output
+        output_csv = "data/inhibited_fluxes.csv"
+        inhibited_solution.fluxes.to_csv(output_csv)
+        print(f"Full flux vector saved to {output_csv}")
     else:
-        print("Model could not find an optimal solution (infeasible).")
+        print("Model could not find an optimal solution (infeasible or failed).")

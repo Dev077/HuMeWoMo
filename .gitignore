@@ -6,3 +6,4 @@ bindingdb_data
 .DS_Store
 
 wandb/
+*.pt
