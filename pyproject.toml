@@ -7,6 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "cobra>=0.30.0",
     "ipython>=9.11.0",
+    "matplotlib>=3.10.8",
     "numpy>=2.4.3",
     "rdkit>=2025.9.6",
     "torch>=2.10.0",
