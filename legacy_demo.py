@@ -1,6 +1,7 @@
 import os
 import sys
 import pickle
+import h5py
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -122,9 +123,9 @@ if __name__ == "__main__":
 
     # 2. Handle Enzyme Pre-computation
     ENZYME_PKL = "data/human1_enzymes.pkl"
-    ENZYME_EMB_PATH = "data/human1_embeddings.pkl"
+    ENZYME_EMB_H5 = "data/human1_embeddings.h5"
     
-    if not os.path.exists(ENZYME_EMB_PATH):
+    if not os.path.exists(ENZYME_EMB_H5):
         print(f"Pre-computing enzyme embeddings from {ENZYME_PKL}...")
         if not os.path.exists(ENZYME_PKL):
             raise FileNotFoundError(f"Error: {ENZYME_PKL} not found. Run gen_enzyme_graphs.py first.")
@@ -132,38 +133,37 @@ if __name__ == "__main__":
         with open(ENZYME_PKL, 'rb') as f:
             enzyme_graphs = pickle.load(f)
             
-        enzyme_embeddings = {}
-        with torch.no_grad():
-            for uid, graph in tqdm(enzyme_graphs.items(), desc="Encoding Enzymes"):
-                if not isinstance(graph, Data):
-                    x = torch.tensor(graph['node_features'], dtype=torch.float)
-                    edge_index = torch.tensor(graph['edge_index'], dtype=torch.long)
-                    edge_attr = torch.tensor(graph.get('edge_features', []), dtype=torch.float)
-                else:
-                    x = graph.x
-                    edge_index = graph.edge_index
-                    edge_attr = graph.edge_attr if hasattr(graph, 'edge_attr') else None
+        with h5py.File(ENZYME_EMB_H5, 'w') as h5f:
+            with torch.no_grad():
+                for uid, graph in tqdm(enzyme_graphs.items(), desc="Encoding Enzymes"):
+                    if not isinstance(graph, Data):
+                        x = torch.tensor(graph['node_features'], dtype=torch.float)
+                        edge_index = torch.tensor(graph['edge_index'], dtype=torch.long)
+                        edge_attr = torch.tensor(graph.get('edge_features', []), dtype=torch.float)
+                    else:
+                        x = graph.x
+                        edge_index = graph.edge_index
+                        edge_attr = graph.edge_attr if hasattr(graph, 'edge_attr') else None
 
-                # Transform to homo graph (residues + contacts as nodes)
-                # Enzyme edge_feat_dim is 1 (normalized distance)
-                homo_x, homo_edge_index = edges_to_nodes(x, edge_index, edge_attr, edge_feat_dim=1)
-                
-                homo_x = homo_x.to(DEVICE)
-                homo_edge_index = homo_edge_index.to(DEVICE)
-                
-                k, v = model.enzyme_encoder(homo_x, homo_edge_index)
-                enzyme_embeddings[uid] = {
-                    'k': k.cpu(), 'v': v.cpu(), 
-                    'num_nodes': k.shape[0]
-                }
+                    # Transform to homo graph (residues + contacts as nodes)
+                    homo_x, homo_edge_index = edges_to_nodes(x, edge_index, edge_attr, edge_feat_dim=1)
+                    
+                    homo_x = homo_x.to(DEVICE)
+                    homo_edge_index = homo_edge_index.to(DEVICE)
+                    
+                    k, v = model.enzyme_encoder(homo_x, homo_edge_index)
+                    
+                    # Store in H5
+                    grp = h5f.create_group(uid)
+                    grp.create_dataset('k', data=k.cpu().numpy())
+                    grp.create_dataset('v', data=v.cpu().numpy())
+                    grp.attrs['num_nodes'] = k.shape[0]
         
-        with open(ENZYME_EMB_PATH, 'wb') as f:
-            pickle.dump(enzyme_embeddings, f)
-        print(f"Saved {len(enzyme_embeddings)} embeddings to {ENZYME_EMB_PATH}")
+        # Explicitly clear enzyme_graphs from memory
+        del enzyme_graphs
+        print(f"Saved embeddings to {ENZYME_EMB_H5}")
     else:
-        print(f"Loading pre-computed enzyme embeddings from {ENZYME_EMB_PATH}...")
-        with open(ENZYME_EMB_PATH, 'rb') as f:
-            enzyme_embeddings = pickle.load(f)
+        print(f"Using pre-computed enzyme embeddings from {ENZYME_EMB_H5}...")
 
     # 3. Encode Drug
     SMILES = "CC(=O)Oc1ccccc1C(=O)O"  # Aspirin
@@ -175,43 +175,46 @@ if __name__ == "__main__":
     # 4. Batch Prediction
     print("Running batch affinity prediction...")
     results = {}
-    uids = list(enzyme_embeddings.keys())
-    batch_size = 16
     
-    with torch.no_grad():
-        for i in tqdm(range(0, len(uids), batch_size), desc="Predicting"):
-            batch_uids = uids[i:i+batch_size]
-            
-            # Prepare enzyme batch
-            e_k_list, e_v_list, e_batch_list = [], [], []
-            for j, uid in enumerate(batch_uids):
-                emb = enzyme_embeddings[uid]
-                e_k_list.append(emb['k'])
-                e_v_list.append(emb['v'])
-                e_batch_list.append(torch.full((emb['num_nodes'],), j, dtype=torch.long))
-            
-            e_k_batch = torch.cat(e_k_list).to(DEVICE)
-            e_v_batch = torch.cat(e_v_list).to(DEVICE)
-            e_batch_vec = torch.cat(e_batch_list).to(DEVICE)
-            
-            # Expand drug to match batch size
-            # drug_k/v are [num_drug_nodes, dim]
-            # decoder expects [total_drug_nodes_in_batch, dim]
-            curr_batch_size = len(batch_uids)
-            d_k_batch = d_k.repeat(curr_batch_size, 1)
-            d_v_batch = d_v.repeat(curr_batch_size, 1)
-            # drug_batch vector: [0,0,0, 1,1,1, ...]
-            num_d_nodes = d_k.shape[0]
-            d_batch_vec = torch.arange(curr_batch_size, device=DEVICE).repeat_interleave(num_d_nodes)
-            
-            preds = model.decoder(
-                d_k_batch, d_v_batch,
-                e_k_batch, e_v_batch,
-                d_batch_vec, e_batch_vec
-            )
-            
-            for j, uid in enumerate(batch_uids):
-                results[uid] = float(preds[j])
+    with h5py.File(ENZYME_EMB_H5, 'r') as h5f:
+        uids = list(h5f.keys())
+        batch_size = 16
+        
+        with torch.no_grad():
+            for i in tqdm(range(0, len(uids), batch_size), desc="Predicting"):
+                batch_uids = uids[i:i+batch_size]
+                
+                # Prepare enzyme batch
+                e_k_list, e_v_list, e_batch_list = [], [], []
+                for j, uid in enumerate(batch_uids):
+                    grp = h5f[uid]
+                    k_np = grp['k'][:]
+                    v_np = grp['v'][:]
+                    num_nodes = grp.attrs['num_nodes']
+                    
+                    e_k_list.append(torch.from_numpy(k_np))
+                    e_v_list.append(torch.from_numpy(v_np))
+                    e_batch_list.append(torch.full((num_nodes,), j, dtype=torch.long))
+                
+                e_k_batch = torch.cat(e_k_list).to(DEVICE)
+                e_v_batch = torch.cat(e_v_list).to(DEVICE)
+                e_batch_vec = torch.cat(e_batch_list).to(DEVICE)
+                
+                # Expand drug to match batch size
+                curr_batch_size = len(batch_uids)
+                d_k_batch = d_k.repeat(curr_batch_size, 1)
+                d_v_batch = d_v.repeat(curr_batch_size, 1)
+                num_d_nodes = d_k.shape[0]
+                d_batch_vec = torch.arange(curr_batch_size, device=DEVICE).repeat_interleave(num_d_nodes)
+                
+                preds = model.decoder(
+                    d_k_batch, d_v_batch,
+                    e_k_batch, e_v_batch,
+                    d_batch_vec, e_batch_vec
+                )
+                
+                for j, uid in enumerate(batch_uids):
+                    results[uid] = float(preds[j])
 
     # 5. Output
     print(f"\nPredictions for {SMILES}:")
