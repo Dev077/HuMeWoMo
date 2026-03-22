@@ -12,4 +12,5 @@ dependencies = [
     "rdkit>=2025.9.6",
     "torch>=2.10.0",
     "torch-geometric>=2.7.0",
+    "wandb>=0.19.0",
 ]

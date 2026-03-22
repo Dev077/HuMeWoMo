@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
+import wandb
 from tqdm import tqdm
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
@@ -20,7 +21,7 @@ from HuMeWoMo.models.homo_binding_model import HomoBindingModel
 # HYPERPARAMETERS & CONFIG
 # =============================================================================
 DATA_DIR = "./bindingdb_data/final_dataset"
-BATCH_SIZE = 4
+BATCH_SIZE = 16
 EPOCHS = 50
 LEARNING_RATE = 1e-4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -39,6 +40,28 @@ os.makedirs(FIGS_DIR, exist_ok=True)
 # =============================================================================
 def train():
     print(f"Training on device: {DEVICE}")
+
+    wandb.init(
+        project="HuMeWoMo",
+        config={
+            "batch_size": BATCH_SIZE,
+            "epochs": EPOCHS,
+            "learning_rate": LEARNING_RATE,
+            "device": str(DEVICE),
+            "model": "HomoBindingModel",
+            "drug_in_dim": 50,
+            "enzyme_in_dim": 27,
+            "hidden_dim": 128,
+            "n_heads": 4,
+            "num_drug_layers": 3,
+            "num_enzyme_layers": 3,
+            "num_decoder_layers": 3,
+            "weight_decay": 1e-5,
+            "scheduler": "ReduceLROnPlateau",
+            "scheduler_factor": 0.5,
+            "scheduler_patience": 5,
+        },
+    )
 
     # Load Data
     train_loader, val_loader, test_loader = get_homo_dataloaders(
@@ -59,7 +82,7 @@ def train():
     ).to(DEVICE)
 
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
     criterion = nn.MSELoss()
 
     best_val_loss = float('inf')
@@ -71,18 +94,20 @@ def train():
         train_loss = 0.0
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{EPOCHS} [Train]")
         
-        for batch in pbar:
+        for i, batch in enumerate(pbar, 1):
             batch = batch.to(DEVICE)
             optimizer.zero_grad()
-            
+
             preds = model(batch)
             loss = criterion(preds, batch.y)
-            
+
             loss.backward()
             optimizer.step()
-            
+
             train_loss += loss.item()
+            avg_loss = train_loss / i
             pbar.set_postfix({'loss': f"{loss.item():.4f}"})
+            wandb.log({"train/batch_loss": loss.item(), "train/running_avg_loss": avg_loss})
         
         avg_train_loss = train_loss / len(train_loader)
         history['train_loss'].append(avg_train_loss)
@@ -111,6 +136,14 @@ def train():
         history['test_loss'].append(avg_test_loss)
 
         print(f"  Summary: Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Test Loss: {avg_test_loss:.4f}")
+
+        wandb.log({
+            "epoch": epoch,
+            "train/loss": avg_train_loss,
+            "val/loss": avg_val_loss,
+            "test/loss": avg_test_loss,
+            "lr": optimizer.param_groups[0]['lr'],
+        })
 
         # --- SCHEDULER & SAVING ---
         scheduler.step(avg_val_loss)
@@ -141,7 +174,9 @@ def train():
             batch = batch.to(DEVICE)
             preds = model(batch)
             final_val_loss += criterion(preds, batch.y).item()
-    print(f"Final Validation Loss (MSE): {final_val_loss / len(val_loader):.4f}")
+    final_val_mse = final_val_loss / len(val_loader)
+    print(f"Final Validation Loss (MSE): {final_val_mse:.4f}")
+    wandb.log({"val/final_loss": final_val_mse})
 
     # --- PLOT LOSS ---
     plt.figure(figsize=(10, 6))
@@ -155,6 +190,8 @@ def train():
     plt.grid(True)
     plt.savefig(os.path.join(FIGS_DIR, "training_loss.png"))
     print(f"Loss plot saved to {FIGS_DIR}/training_loss.png")
+    wandb.log({"loss_curve": wandb.Image(os.path.join(FIGS_DIR, "training_loss.png"))})
+    wandb.finish()
 
 if __name__ == "__main__":
     train()

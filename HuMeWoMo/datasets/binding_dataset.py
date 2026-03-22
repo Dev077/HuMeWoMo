@@ -87,12 +87,14 @@ class CombinedBatch:
         """Move all tensors to device."""
         self.drug_x = self.drug_x.to(device)
         self.drug_edge_index = self.drug_edge_index.to(device)
-        self.drug_edge_attr = self.drug_edge_attr.to(device)
+        if self.drug_edge_attr is not None:
+            self.drug_edge_attr = self.drug_edge_attr.to(device)
         self.drug_batch = self.drug_batch.to(device)
 
         self.enzyme_x = self.enzyme_x.to(device)
         self.enzyme_edge_index = self.enzyme_edge_index.to(device)
-        self.enzyme_edge_attr = self.enzyme_edge_attr.to(device)
+        if self.enzyme_edge_attr is not None:
+            self.enzyme_edge_attr = self.enzyme_edge_attr.to(device)
         self.enzyme_batch = self.enzyme_batch.to(device)
 
         self.y = self.y.to(device)

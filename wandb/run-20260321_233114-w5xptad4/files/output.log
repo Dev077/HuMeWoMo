@@ -1,0 +1,20 @@
+Loading ./bindingdb_data/final_dataset/train.pkl...
+  Loaded 1,054,552 samples (task=regression, homo=True)
+Loading ./bindingdb_data/final_dataset/val.pkl...
+  Loaded 152,841 samples (task=regression, homo=True)
+Loading ./bindingdb_data/final_dataset/test.pkl...
+  Loaded 122,108 samples (task=regression, homo=True)
+Epoch 1/50 [Train]:  17%|██████▌                                | 44158/263638 [17:56<1:29:09, 41.03it/s, loss=1.3203]
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/tygo/code/HuMeWoMo/HuMeWoMo/training/train_homo_binding.py", line 196, in <module>
+    if __name__ == "__main__":
+        ^^^^^^^
+  File "/home/tygo/code/HuMeWoMo/HuMeWoMo/training/train_homo_binding.py", line 104, in train
+    loss.backward()
+    ~~~~~~~~~~~~~^^
+  File "/home/tygo/code/HuMeWoMo/.venv/lib/python3.13/site-packages/torch/_tensor.py", line 575, in backward
+    def backward(
+
+KeyboardInterrupt

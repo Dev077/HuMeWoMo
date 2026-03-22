@@ -54,14 +54,16 @@ TASK = "regression"
 # =============================================================================
 # GRAPH TRANSFORMATION: promote edges to nodes
 # =============================================================================
-def edges_to_nodes(x, edge_index, edge_attr):
+def edges_to_nodes(x, edge_index, edge_attr, edge_feat_dim=None):
     """
     Transform a graph by promoting edges to nodes.
 
     Input (standard graph):
-        x:          (num_atoms, atom_feat_dim)     — atom node features
-        edge_index: (2, num_edges)                 — directed edges
-        edge_attr:  (num_edges, edge_feat_dim)     — bond/contact features
+        x:              (num_atoms, atom_feat_dim)     — atom node features
+        edge_index:     (2, num_edges)                 — directed edges
+        edge_attr:      (num_edges, edge_feat_dim)     — bond/contact features
+        edge_feat_dim:  expected edge feature dimension (required for consistent
+                        output size when a graph has no edges)
 
     Output (homo graph):
         homo_x:          (num_atoms + num_unique_edges, unified_feat_dim)
@@ -91,10 +93,17 @@ def edges_to_nodes(x, edge_index, edge_attr):
 
     if edge_attr is not None and edge_attr.shape[0] > 0:
         edge_feat_dim = edge_attr.shape[1]
-    else:
-        # No edges — return atoms only with type indicator
+    elif edge_feat_dim is None:
+        raise ValueError(
+            "edge_feat_dim must be provided when edge_attr is None/empty, "
+            "otherwise output dimensions will be inconsistent across samples."
+        )
+
+    if edge_attr is None or edge_attr.shape[0] == 0:
+        # No edges — return atoms only with padding + type indicator
         homo_x = torch.cat([
             x,
+            torch.zeros(num_atoms, edge_feat_dim, device=x.device),  # padding for bond features
             torch.ones(num_atoms, 1, device=x.device),    # is_atom = 1
             torch.zeros(num_atoms, 1, device=x.device),   # is_bond = 0
         ], dim=1)
@@ -182,6 +191,14 @@ class HomoDrugEnzymeDataset(Dataset):
             self.samples = self.samples[:max_samples]
 
         self.task = task
+
+        # Detect edge feature dims from first sample for consistent output sizes
+        s0 = self.samples[0]
+        drug0 = self._to_pyg(s0['drug_graph'])
+        enzyme0 = self._to_pyg(s0['enzyme_graph'])
+        self.drug_edge_feat_dim = drug0.edge_attr.shape[1] if drug0.edge_attr is not None and drug0.edge_attr.shape[0] > 0 else 0
+        self.enzyme_edge_feat_dim = enzyme0.edge_attr.shape[1] if enzyme0.edge_attr is not None and enzyme0.edge_attr.shape[0] > 0 else 0
+
         print(f"  Loaded {len(self.samples):,} samples (task={task}, homo=True)")
 
     def __len__(self):
@@ -204,11 +221,14 @@ class HomoDrugEnzymeDataset(Dataset):
         enzyme = self._to_pyg(s['enzyme_graph'])
 
         # Transform: promote edges to nodes
+        # Pass expected edge_feat_dim so edgeless graphs get consistent output size
         drug_homo_x, drug_homo_edge_index = edges_to_nodes(
-            drug.x, drug.edge_index, drug.edge_attr
+            drug.x, drug.edge_index, drug.edge_attr,
+            edge_feat_dim=drug.edge_attr.shape[1] if drug.edge_attr is not None and drug.edge_attr.shape[0] > 0 else self.drug_edge_feat_dim
         )
         enzyme_homo_x, enzyme_homo_edge_index = edges_to_nodes(
-            enzyme.x, enzyme.edge_index, enzyme.edge_attr
+            enzyme.x, enzyme.edge_index, enzyme.edge_attr,
+            edge_feat_dim=enzyme.edge_attr.shape[1] if enzyme.edge_attr is not None and enzyme.edge_attr.shape[0] > 0 else self.enzyme_edge_feat_dim
         )
 
         # New PyG Data objects with no edge_attr (info is in the nodes now)
