@@ -66,11 +66,22 @@ def evaluate_gpr_activity(rule, gene_activities):
         print(f"Warning: Could not evaluate GPR '{rule}': {e}")
         return 1.0
 
-def simulate_enzyme_inhibition(model, uniprot_list, inhibition_level=0.5):
+def simulate_enzyme_inhibition(model, enzyme_data, default_inhibition=0.5):
     """
     Simulates enzyme inhibition by scaling reaction bounds based on GPR rules.
+    
+    Args:
+        model: cobra.Model
+        enzyme_data: List of UniProt IDs OR Dict of {uniprot_id: inhibition_level}
+        default_inhibition: Level to use if enzyme_data is a list
     """
-    # 1. Map UniProt IDs to model gene IDs
+    # 1. Standardize input to a dictionary
+    if isinstance(enzyme_data, list):
+        inhibition_dict = {uid: default_inhibition for uid in enzyme_data}
+    else:
+        inhibition_dict = enzyme_data
+
+    # 2. Map UniProt IDs to model gene IDs
     uniprot_to_gene = {}
     for gene in model.genes:
         up = gene.annotation.get('uniprot')
@@ -81,23 +92,25 @@ def simulate_enzyme_inhibition(model, uniprot_list, inhibition_level=0.5):
                     uniprot_to_gene[u] = []
                 uniprot_to_gene[u].append(gene.id)
                 
-    # 2. Set activity for each gene in the model
+    # 3. Set activity for each gene in the model
     gene_activities = {gene.id: 1.0 for gene in model.genes}
     target_genes_found = []
-    for uid in uniprot_list:
+    
+    for uid, level in inhibition_dict.items():
         if uid in uniprot_to_gene:
             for gid in uniprot_to_gene[uid]:
-                gene_activities[gid] = (1.0 - inhibition_level)
+                # Activity is 1.0 minus inhibition (e.g., 0.8 inhibition = 0.2 activity)
+                gene_activities[gid] = max(0.0, 1.0 - level)
                 target_genes_found.append(gid)
     
     if not target_genes_found:
-        print(f"None of the UniProt IDs {uniprot_list} were found in the model.")
+        print(f"None of the targeted enzymes were found in the model.")
         return None
 
     with model:
-        print(f"Inhibiting enzymes associated with genes: {set(target_genes_found)}")
+        print(f"Inhibiting {len(inhibition_dict)} enzymes involving {len(set(target_genes_found))} genes.")
         
-        # 3. Scale reactions based on GPR evaluation
+        # 4. Scale reactions based on GPR evaluation
         affected_count = 0
         for rxn in model.reactions:
             if not rxn.gene_reaction_rule:
@@ -121,12 +134,15 @@ if __name__ == "__main__":
     model = cobra.io.read_sbml_model("data/Human-GEM.xml")
     model.objective = "MAR13082" 
     
-    # Target enzymes by UniProt IDs
-    enzyme_targets = ["O60762", "Q9BTY2", "P48506"]
-    inhibition_level = 0.8  # 80% inhibition
+    # Example: Dict of specific inhibition levels per enzyme
+    enzyme_targets = {
+        "O60762": 0.9, # 90% inhibition
+        "Q9BTY2": 0.4, # 40% inhibition
+        "P48506": 0.1  # 10% inhibition
+    }
     
     print("Optimizing...")
-    inhibited_solution = simulate_enzyme_inhibition(model, enzyme_targets, inhibition_level)
+    inhibited_solution = simulate_enzyme_inhibition(model, enzyme_targets)
     
     if inhibited_solution is not None and inhibited_solution.status == 'optimal':
         print(f"Inhibition Objective: {inhibited_solution.objective_value}")
