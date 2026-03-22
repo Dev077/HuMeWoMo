@@ -4,3 +4,5 @@ data
 
 bindingdb_data
 .DS_Store
+
+wandb/
