@@ -9,7 +9,7 @@ class HomoGraphEncoder(nn.Module):
     Transformer-based encoder for homogeneous graphs (where edges are nodes).
     Each node (atom/bond or residue/contact) queries its neighbors to update its state.
     """
-    def __init__(self, in_channels, hidden_channels, out_channels, num_layers=3, heads=4):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers=8, heads=4):
         super().__init__()
         self.lin_in = nn.Linear(in_channels, hidden_channels)
         
@@ -104,7 +104,7 @@ class CrossAttentionDecoder(nn.Module):
     Latent-Refinement Decoder. 
     Starts with learned latent embeddings and refines them through multiple blocks.
     """
-    def __init__(self, embed_dim, num_latents=16, num_layers=3, num_heads=4):
+    def __init__(self, embed_dim, num_latents=16, num_layers=4, num_heads=4):
         super().__init__()
         # The "learned embedding for the first iteration"
         self.latent_embeddings = nn.Parameter(torch.randn(1, num_latents, embed_dim))
@@ -149,9 +149,9 @@ class HomoBindingModel(nn.Module):
                  enzyme_in_dim=27, 
                  hidden_dim=128, 
                  n_heads=4,
-                 num_drug_layers=3,
-                 num_enzyme_layers=3,
-                 num_decoder_layers=3,
+                 num_drug_layers=8,
+                 num_enzyme_layers=8,
+                 num_decoder_layers=4,
                  num_latents=16):
         super().__init__()
         self.drug_encoder = HomoGraphEncoder(drug_in_dim, hidden_dim, hidden_dim, num_layers=num_drug_layers, heads=n_heads)

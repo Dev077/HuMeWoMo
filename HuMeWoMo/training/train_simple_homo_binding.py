@@ -15,23 +15,20 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from HuMeWoMo.datasets.homo_binding_dataset import get_homo_dataloaders
-from HuMeWoMo.models.homo_binding_model import HomoBindingModel
+from HuMeWoMo.models.simple_homo_binding_model import SimpleHomoBindingModel
 
 # =============================================================================
 # HYPERPARAMETERS & CONFIG
 # =============================================================================
 DATA_DIR = "./bindingdb_data/final_dataset"
-BATCH_SIZE = 128
+BATCH_SIZE = 64
 EPOCHS = 50
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 5e-4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Model Save Constants
-MIN_IMPROVEMENT = 0.005  # Save backup if val loss improves by at least this much
-MODEL_SAVE_PATH = "best_homo_model_8_4.pt"
-BACKUP_SAVE_PATH = "best_homo_model_8_4_backup.pt"
-CHECKPOINT_EVERY_N_BATCHES = 500  # Save a checkpoint every N batches
-CHECKPOINT_DIR = "checkpoints_8_4"
+MODEL_SAVE_PATH = "best_simple_homo_model.pt"
+CHECKPOINT_DIR = "checkpoints_simple"
 
 # Plotting
 FIGS_DIR = os.path.join(project_root, "figs")
@@ -42,27 +39,23 @@ os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 # TRAINING LOOP
 # =============================================================================
 def train():
-    print(f"Training on device: {DEVICE} (8/4 Architecture)")
+    print(f"Training SimpleHomoBindingModel on device: {DEVICE}")
 
     wandb.init(
         project="HuMeWoMo",
+        name="SimpleHomoModel-Training",
         config={
             "batch_size": BATCH_SIZE,
             "epochs": EPOCHS,
             "learning_rate": LEARNING_RATE,
             "device": str(DEVICE),
-            "model": "HomoBindingModel",
-            "drug_in_dim": 50,
-            "enzyme_in_dim": 27,
+            "model": "SimpleHomoBindingModel",
             "hidden_dim": 128,
             "n_heads": 4,
             "num_drug_layers": 8,
             "num_enzyme_layers": 8,
             "num_decoder_layers": 4,
-            "weight_decay": 1e-5,
-            "scheduler": "ReduceLROnPlateau",
-            "scheduler_factor": 0.5,
-            "scheduler_patience": 5,
+            "weight_decay": 1e-4,
         },
     )
 
@@ -74,7 +67,7 @@ def train():
     )
 
     # Initialize Model
-    model = HomoBindingModel(
+    model = SimpleHomoBindingModel(
         drug_in_dim=50,
         enzyme_in_dim=27,
         hidden_dim=128,
@@ -84,22 +77,11 @@ def train():
         num_decoder_layers=4
     ).to(DEVICE)
 
-    # Try to load best model checkpoint if it exists
-    try:
-        checkpoint = torch.load(MODEL_SAVE_PATH, map_location=DEVICE)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        print(f"Loaded best model from {MODEL_SAVE_PATH} (epoch {checkpoint['epoch']}, val_loss {checkpoint['val_loss']:.4f})")
-    except FileNotFoundError:
-        print(f"No checkpoint found at {MODEL_SAVE_PATH}, starting from scratch.")
-    except Exception as e:
-        print(f"Failed to load checkpoint from {MODEL_SAVE_PATH}: {e}. Starting from scratch.")
-
-    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
+    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
     criterion = nn.MSELoss()
 
     best_val_loss = float('inf')
-    global_step = 0
     history = {'train_loss': [], 'val_loss': [], 'test_loss': []}
 
     for epoch in range(1, EPOCHS + 1):
@@ -119,23 +101,8 @@ def train():
             optimizer.step()
 
             train_loss += loss.item()
-            avg_loss = train_loss / i
-            global_step += 1
             pbar.set_postfix({'loss': f"{loss.item():.4f}"})
-            wandb.log({"train/batch_loss": loss.item(), "train/running_avg_loss": avg_loss})
-
-            # Periodic checkpoint every N batches
-            if global_step % CHECKPOINT_EVERY_N_BATCHES == 0:
-                ckpt_path = os.path.join(CHECKPOINT_DIR, f"checkpoint_step_{global_step}.pt")
-                torch.save({
-                    'epoch': epoch,
-                    'global_step': global_step,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'train_loss': avg_loss,
-                }, ckpt_path)
-                print(f"\n  Checkpoint saved to {ckpt_path}")
-        
+            
         avg_train_loss = train_loss / len(train_loader)
         history['train_loss'].append(avg_train_loss)
 
@@ -151,7 +118,7 @@ def train():
         avg_val_loss = val_loss / len(val_loader)
         history['val_loss'].append(avg_val_loss)
         
-        # --- TEST (Track only) ---
+        # --- TEST ---
         test_loss = 0.0
         with torch.no_grad():
             for batch in test_loader:
@@ -175,35 +142,15 @@ def train():
         # --- SCHEDULER & SAVING ---
         scheduler.step(avg_val_loss)
 
-        if avg_val_loss < (best_val_loss - MIN_IMPROVEMENT):
-            print(f"  Validation loss improved from {best_val_loss:.4f} to {avg_val_loss:.4f}. Saving backup...")
+        if avg_val_loss < best_val_loss:
+            print(f"  Validation loss improved from {best_val_loss:.4f} to {avg_val_loss:.4f}. Saving best model...")
             best_val_loss = avg_val_loss
-            # Save the primary best model
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'val_loss': avg_val_loss,
             }, MODEL_SAVE_PATH)
-            
-            # Save a secondary backup
-            torch.save(model.state_dict(), BACKUP_SAVE_PATH)
-
-    # --- FINAL EVALUATION ON VAL ---
-    print("\n" + "="*50)
-    print("FINAL VALIDATION RUN")
-    print("="*50)
-    model.load_state_dict(torch.load(MODEL_SAVE_PATH)['model_state_dict'])
-    model.eval()
-    final_val_loss = 0.0
-    with torch.no_grad():
-        for batch in tqdm(val_loader, desc="Final Val"):
-            batch = batch.to(DEVICE)
-            preds = model(batch)
-            final_val_loss += criterion(preds, batch.y).item()
-    final_val_mse = final_val_loss / len(val_loader)
-    print(f"Final Validation Loss (MSE): {final_val_mse:.4f}")
-    wandb.log({"val/final_loss": final_val_mse})
 
     # --- PLOT LOSS ---
     plt.figure(figsize=(10, 6))
@@ -212,12 +159,10 @@ def train():
     plt.plot(history['test_loss'], label='Test Loss')
     plt.xlabel('Epoch')
     plt.ylabel('MSE Loss')
-    plt.title('HomoBindingModel Training History')
+    plt.title('SimpleHomoBindingModel Training History')
     plt.legend()
     plt.grid(True)
-    plt.savefig(os.path.join(FIGS_DIR, "training_loss.png"))
-    print(f"Loss plot saved to {FIGS_DIR}/training_loss.png")
-    wandb.log({"loss_curve": wandb.Image(os.path.join(FIGS_DIR, "training_loss.png"))})
+    plt.savefig(os.path.join(FIGS_DIR, "simple_training_loss.png"))
     wandb.finish()
 
 if __name__ == "__main__":
