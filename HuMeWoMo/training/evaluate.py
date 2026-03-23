@@ -48,12 +48,12 @@ def evaluate(model_path, data_dir="./bindingdb_data/final_dataset", batch_size=4
         print("  Loaded raw state_dict")
 
     # Load data
-    train_loader, val_loader, test_loader = get_homo_dataloaders(
+    loader = get_homo_dataloaders(
         data_dir=data_dir,
         batch_size=batch_size,
         num_workers=4 if device.type == "cuda" else 0,
+        split=split,
     )
-    loader = {"train": train_loader, "val": val_loader, "test": test_loader}[split]
 
     # Run inference
     model.eval()

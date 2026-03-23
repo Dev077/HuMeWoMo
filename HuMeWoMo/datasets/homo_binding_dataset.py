@@ -248,16 +248,26 @@ class HomoDrugEnzymeDataset(Dataset):
 # DATALOADER FACTORY
 # =============================================================================
 def get_homo_dataloaders(data_dir=DATA_DIR, batch_size=64, task=TASK,
-                         num_workers=0, max_samples=None):
+                         num_workers=0, max_samples=None, split=None):
     """
     Create train/val/test DataLoaders using the Homo transformation.
     Same interface as get_dataloaders but uses HomoDrugEnzymeDataset.
+
+    If split is provided (e.g. 'train', 'val', or 'test'), returns only that DataLoader.
+    Otherwise returns (train_loader, val_loader, test_loader).
     """
     collater = DrugEnzymeCollater()
 
+    if split is not None:
+        if split not in ['train', 'val', 'test']:
+            raise ValueError(f"Invalid split: {split}. Must be 'train', 'val', or 'test'.")
+        target_splits = [split]
+    else:
+        target_splits = ['train', 'val', 'test']
+
     loaders = {}
-    for split in ['train', 'val', 'test']:
-        pkl_path = os.path.join(data_dir, f"{split}.pkl")
+    for s in target_splits:
+        pkl_path = os.path.join(data_dir, f"{s}.pkl")
         if not os.path.exists(pkl_path):
             raise FileNotFoundError(f"Missing {pkl_path}. Run step5 first.")
 
@@ -266,13 +276,16 @@ def get_homo_dataloaders(data_dir=DATA_DIR, batch_size=64, task=TASK,
         loader = torch.utils.data.DataLoader(
             dataset,
             batch_size=batch_size,
-            shuffle=(split == 'train'),
+            shuffle=(s == 'train'),
             num_workers=num_workers,
             collate_fn=collater,
-            drop_last=(split == 'train'),
+            drop_last=(s == 'train'),
             pin_memory=torch.cuda.is_available(),
         )
-        loaders[split] = loader
+        loaders[s] = loader
+
+    if split is not None:
+        return loaders[split]
 
     return loaders['train'], loaders['val'], loaders['test']
 

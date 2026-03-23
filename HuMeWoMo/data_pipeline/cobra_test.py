@@ -169,7 +169,18 @@ if __name__ == "__main__":
             "P48506": 0.1  # 10% inhibition
         }
     
-    print("Optimizing...")
+    print("Optimizing baseline...")
+    baseline_solution = model.optimize()
+    if baseline_solution.status == 'optimal':
+        print(f"Baseline Objective:   {baseline_solution.objective_value:.6f}")
+        baseline_csv = "data/baseline_fluxes.csv"
+        baseline_solution.fluxes.to_csv(baseline_csv)
+        print(f"Baseline fluxes saved to {baseline_csv}")
+    else:
+        print("Baseline optimization failed!")
+        exit(1)
+
+    print("\nOptimizing with inhibition...")
     inhibited_solution = simulate_enzyme_inhibition(model, enzyme_targets)
     
     if inhibited_solution is not None and inhibited_solution.status == 'optimal':
@@ -178,6 +189,11 @@ if __name__ == "__main__":
         # 2. Save flux output
         output_csv = "data/inhibited_fluxes.csv"
         inhibited_solution.fluxes.to_csv(output_csv)
-        print(f"Full flux vector saved to {output_csv}")
+        print(f"Inhibited fluxes saved to {output_csv}")
+
+        # Comparison summary
+        diff = baseline_solution.objective_value - inhibited_solution.objective_value
+        pct = (diff / baseline_solution.objective_value) * 100 if baseline_solution.objective_value != 0 else 0
+        print(f"Objective reduction:  {diff:.6f} ({pct:.2f}%)")
     else:
         print("Model could not find an optimal solution (infeasible or failed).")
